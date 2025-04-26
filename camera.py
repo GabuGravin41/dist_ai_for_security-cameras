@@ -4,6 +4,7 @@ import requests
 import argparse
 import os
 import numpy as np
+from deepface import DeepFace
 
 class CameraSimulation:
     def __init__(self, camera_id, video_path, reference_img_path, server_url, confidence_threshold=0.6, detection_interval=2, use_webcam=False, webcam_id=0):
@@ -51,11 +52,11 @@ class CameraSimulation:
     
     def _setup_reference_image(self):
         """
-        Setup reference image for facial detection
+        Setup reference image for facial recognition
         """
         # Check if reference image exists
         if os.path.exists(self.reference_img_path):
-            # Load reference image
+            # Load reference image for facial recognition
             self.reference_img = cv2.imread(self.reference_img_path)
             if self.reference_img is None:
                 if self.use_webcam:
@@ -106,20 +107,44 @@ class CameraSimulation:
     
     def detect_faces(self, frame):
         """
-        Detect faces in a frame using simple OpenCV
+        Detect and recognize faces in a frame
         
         Returns:
-            List of face coordinates as (x, y, w, h)
+            List of (face_coords, confidence) tuples for recognized faces
         """
         # Convert to grayscale for face detection
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
-        # Detect faces
+        # Detect faces with OpenCV (faster initial screening)
         faces = self.face_cascade.detectMultiScale(gray, 1.1, 5)
         
-        return faces
+        results = []
+        for (x, y, w, h) in faces:
+            face_img = frame[y:y+h, x:x+w]
+            
+            try:
+                # Use DeepFace to verify if this face matches the reference
+                verification = DeepFace.verify(
+                    img1_path=face_img,
+                    img2_path=self.reference_img_path,
+                    enforce_detection=False,
+                    model_name="VGG-Face"
+                )
+                
+                # Get the verification confidence and check threshold
+                confidence = verification["distance"]
+                recognized = verification["verified"]
+                
+                if recognized and confidence >= self.confidence_threshold:
+                    results.append(((x, y, w, h), confidence))
+            
+            except Exception as e:
+                # If face verification fails, just continue
+                continue
+        
+        return results
     
-    def send_alert(self, face_coords):
+    def send_alert(self, confidence):
         """Send detection alert to server"""
         current_time = time.time()
         
@@ -130,14 +155,10 @@ class CameraSimulation:
         # Update last detection time
         self.last_detection_time = current_time
         
-        # Calculate confidence based on size of face (just for simulation purposes)
-        x, y, w, h = face_coords
-        confidence = min(0.9, w * h / 10000)  # Simple heuristic
-        
         # Prepare data for sending
         data = {
             "camera_id": self.camera_id,
-            "person_id": "detected_person",
+            "person_id": "target_person",  # In a real system, this would be the identified person
             "confidence": float(confidence),
             "location": "simulated_location"
         }
@@ -187,23 +208,22 @@ class CameraSimulation:
             
             # Only process every few frames to save CPU
             if frame_count % processing_interval == 0:
-                # Detect faces
-                faces = self.detect_faces(frame)
+                # Detect and recognize faces
+                detections = self.detect_faces(frame)
                 
-                # For each detected face
-                for (x, y, w, h) in faces:
+                # If faces detected, send alerts
+                for (face_coords, confidence) in detections:
+                    (x, y, w, h) = face_coords
+                    
                     # Draw rectangle around detected face
                     cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
                     
-                    # Calculate simple confidence metric
-                    confidence = min(0.9, w * h / 10000)
-                    
                     # Add text with confidence score
-                    cv2.putText(frame, f"Person: {confidence:.2f}", (x, y-10),
+                    cv2.putText(frame, f"Match: {confidence:.2f}", (x, y-10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
                     
                     # Send alert to server
-                    self.send_alert((x, y, w, h))
+                    self.send_alert(confidence)
                 
                 # Show frame
                 cv2.imshow(f'Camera {self.camera_id}', frame)

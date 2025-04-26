@@ -1,0 +1,15 @@
+# Python-specific
+__pycache__/
+*.py[cod]
+*.class
+*.so
+.Python
+env/
+venv/
+ENV/
+# Log files
+*.log
+detections.json
+# VS Code
+.vscode/
+"!reference.jpg"
